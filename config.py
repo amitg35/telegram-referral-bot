@@ -1,5 +1,7 @@
-BOT_TOKEN = "YOUR_BOT_TOKEN"
-MONGO_URL = "YOUR_MONGODB_URL"
+import os
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+MONGO_URL = os.getenv("MONGO_URL")
 
 FORCE_CHANNELS = [
     "@channel1",
