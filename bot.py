@@ -1,120 +1,152 @@
 import telebot
+import os
+import uuid
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-from datetime import datetime, date
-from config import *
-from database import users, special_links
 
+BOT_TOKEN = os.getenv("8517864682:AAEx4QpsV1NRRQh1mMfjrC382hUbN4GckTk")
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# ================= FORCE JOIN =================
+# ===== FORCE JOIN CHANNELS (username only) =====
+FORCE_CHANNELS = [
+    "1ZMyGGyTb1s0MzM1",
+    "Db38DSH0iR1iMDc1",
+    "ZlHW_ZUS6yQ1NDA9",
+    "imnY9aNAt9A1YzNl"
+]
+
+user_messages = {}
+special_links = {}
+
+# ===== FORCE JOIN CHECK =====
 def is_joined(user_id):
     for ch in FORCE_CHANNELS:
         try:
-            s = bot.get_chat_member(ch, user_id).status
-            if s not in ["member", "administrator", "creator"]:
+            status = bot.get_chat_member(f"@{ch}", user_id).status
+            if status not in ["member", "administrator", "creator"]:
                 return False
         except:
             return False
     return True
 
-def join_markup():
-    m = InlineKeyboardMarkup()
-    for i, l in enumerate(JOIN_LINKS, 1):
-        m.add(InlineKeyboardButton(f"Join {i}", url=l))
-    m.add(InlineKeyboardButton("✅ Joined", callback_data="check"))
-    return m
-
-# ================= START =================
+# ===== START COMMAND =====
 @bot.message_handler(commands=["start"])
-def start(msg):
-    user_id = msg.from_user.id
-    args = msg.text.split()
+def start(message):
+    user_id = message.from_user.id
+    args = message.text.split()
 
-    if not users.find_one({"user_id": user_id}):
-        ref = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
-        users.insert_one({
-            "user_id": user_id,
-            "coins": 0,
-            "referrals": 0,
-            "daily": str(date.today()),
-            "ref_by": ref
-        })
-        if ref:
-            users.update_one({"user_id": ref}, {"$inc": {"referrals": 1, "coins": 10}})
+    if len(args) > 1:
+        code = args[1]
+        if code in special_links:
+            for msg in special_links[code]:
+                bot.send_message(message.chat.id, msg)
+            return
 
     if not is_joined(user_id):
-        bot.send_message(msg.chat.id, "🚫 Please join all channels", reply_markup=join_markup())
-        return
-
-    bot.send_message(
-        msg.chat.id,
-        f"👋 Welcome\n\n💰 Coins: {users.find_one({'user_id': user_id})['coins']}\n"
-        f"🔗 Referral:\nhttps://t.me/{bot.get_me().username}?start={user_id}"
-    )
-
-# ================= DAILY BONUS =================
-@bot.message_handler(commands=["daily"])
-def daily(msg):
-    u = users.find_one({"user_id": msg.from_user.id})
-    if u["daily"] == str(date.today()):
-        bot.send_message(msg.chat.id, "❌ Aaj already claim kar chuke ho")
+        markup = InlineKeyboardMarkup()
+        for ch in FORCE_CHANNELS:
+            markup.add(
+                InlineKeyboardButton(f"Join @{ch}", url=f"https://t.me/{ch}")
+            )
+        markup.add(
+            InlineKeyboardButton("✅ CHECK JOIN", callback_data="check_join")
+        )
+        bot.send_message(
+            message.chat.id,
+            "🚫 Bot use karne ke liye pehle channels join karo:",
+            reply_markup=markup
+        )
     else:
-        users.update_one({"user_id": msg.from_user.id},
-                         {"$set": {"daily": str(date.today())}, "$inc": {"coins": DAILY_BONUS}})
-        bot.send_message(msg.chat.id, f"🎁 Daily bonus +{DAILY_BONUS} coins")
+        bot.send_message(message.chat.id, "✅ Welcome! Auto reply active hai.")
+
+# ===== CHECK JOIN BUTTON =====
+@bot.callback_query_handler(func=lambda call: call.data == "check_join")
+def check_join(call):
+    if is_joined(call.from_user.id):
+        bot.edit_message_text(
+            "✅ Join verified! Ab bot use kar sakte ho.",
+            call.message.chat.id,
+            call.message.message_id
+        )
+    else:
+        bot.answer_callback_query(call.id, "❌ Pehle join karo!", show_alert=True)
+
+# ===== AUTO REPLY =====
+@bot.message_handler(func=lambda m: is_joined(m.from_user.id))
+def auto_reply(message):
+    bot.reply_to(message, f"🤖 Auto Reply:\n{message.text}")
 
 # ================= SPECIAL LINK =================
+
 @bot.message_handler(commands=["special_link"])
-def special_link(msg):
-    m = InlineKeyboardMarkup(row_width=2)
-    m.add(
-        InlineKeyboardButton("CREATE", callback_data="sp_create"),
-        InlineKeyboardButton("MODIFY", callback_data="sp_modify"),
-        InlineKeyboardButton("DELETE", callback_data="sp_delete"),
-        InlineKeyboardButton("CLOSE", callback_data="sp_close")
-    )
-    bot.send_message(msg.chat.id, "🔗 Special Link Panel", reply_markup=m)
-
-# ===== CREATE FLOW =====
-@bot.callback_query_handler(func=lambda c: c.data == "sp_create")
-def create_link(c):
-    bot.send_message(c.message.chat.id, "✍️ Send me the message you want to store")
-    bot.register_next_step_handler(c.message, save_message)
-
-def save_message(msg):
-    data = special_links.insert_one({
-        "owner": msg.from_user.id,
-        "messages": [msg.text],
-        "created": datetime.now()
-    })
-    m = InlineKeyboardMarkup()
-    m.add(
-        InlineKeyboardButton("GENERATE LINK", callback_data=f"gen_{data.inserted_id}"),
-        InlineKeyboardButton("CANCEL", callback_data="cancel")
+def special_link(message):
+    markup = InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        InlineKeyboardButton("➕ CREATE", callback_data="create"),
+        InlineKeyboardButton("✏️ MODIFY", callback_data="modify"),
+        InlineKeyboardButton("🗑 DELETE", callback_data="delete"),
+        InlineKeyboardButton("❌ CLOSE", callback_data="close")
     )
     bot.send_message(
-        msg.chat.id,
-        "📦 Stored Messages: 1\nWant to add another message? Just send it!",
-        reply_markup=m
+        message.chat.id,
+        "Do you want to create a new special link, or modify an existing one, or delete it?",
+        reply_markup=markup
     )
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("gen_"))
-def generate_link(c):
-    link_id = c.data.split("_")[1]
-    link = f"https://t.me/{bot.get_me().username}?start=sp{link_id}"
+@bot.callback_query_handler(func=lambda call: True)
+def callback(call):
+    uid = call.from_user.id
 
-    m = InlineKeyboardMarkup()
-    m.add(InlineKeyboardButton("SHARE URL", url=f"https://t.me/share/url?url={link}"))
+    if call.data == "create":
+        user_messages[uid] = []
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("🔗 GENERATE LINK", callback_data="generate"),
+            InlineKeyboardButton("❌ CANCEL", callback_data="cancel")
+        )
+        bot.send_message(
+            call.message.chat.id,
+            "Send me the message you want to store\n\nStored Messages: 0\nWant to add another message? Just send it!",
+            reply_markup=markup
+        )
 
-    bot.send_message(c.message.chat.id, f"🔗 Here is your special link:\n{link}", reply_markup=m)
+    elif call.data == "generate":
+        if uid not in user_messages or not user_messages[uid]:
+            bot.answer_callback_query(call.id, "❌ No message stored", show_alert=True)
+            return
 
-# ================= AUTO REPLY =================
-@bot.message_handler(func=lambda m: True)
-def auto(m):
-    if not is_joined(m.from_user.id):
-        bot.send_message(m.chat.id, "⚠️ Join all channels first")
-        return
-    bot.send_message(m.chat.id, "🤖 Commands:\n/start\n/daily\n/special_link")
+        code = str(uuid.uuid4())[:8]
+        special_links[code] = user_messages[uid]
 
-print("Bot Running...")
+        link = f"https://t.me/{bot.get_me().username}?start={code}"
+        markup = InlineKeyboardMarkup()
+        markup.add(
+            InlineKeyboardButton("📤 SHARE URL", url=f"https://t.me/share/url?url={link}")
+        )
+        bot.send_message(
+            call.message.chat.id,
+            f"Here is your special link:\n\n{link}",
+            reply_markup=markup
+        )
+
+    elif call.data == "cancel":
+        user_messages.pop(uid, None)
+        bot.send_message(call.message.chat.id, "❌ Cancelled")
+
+    elif call.data == "close":
+        bot.edit_message_text(
+            "Closed ❌",
+            call.message.chat.id,
+            call.message.message_id
+        )
+
+# ===== STORE SPECIAL MESSAGES =====
+@bot.message_handler(func=lambda m: m.from_user.id in user_messages)
+def store_message(message):
+    uid = message.from_user.id
+    user_messages[uid].append(message.text)
+    bot.reply_to(
+        message,
+        f"✅ Stored Messages: {len(user_messages[uid])}\nWant to add another message? Just send it!"
+    )
+
 bot.infinity_polling()
